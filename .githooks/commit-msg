@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MSG_FILE="$1"
+HEADER="$(head -n1 "$MSG_FILE")"
+
+# ---- Your rules ----
+ALLOWED_TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|merge|config|deps"
+HEADER_MAX=100
+TYPE_SCOPE_REGEX="^(${ALLOWED_TYPES})(\([^)]+\))?: .+"
+
+# Extract subject after "type(scope): "
+SUBJECT="$(echo "$HEADER" | sed -E "s/^(${ALLOWED_TYPES})(\([^)]+\))?: //")"
+
+fail() {
+  echo "Commit message invalid."
+  echo "Example: feat(auth): add refresh token"
+  echo "Rules: type-enum=(${ALLOWED_TYPES}), header-max-length<=${HEADER_MAX}, subject-case: never sentence/start/pascal/upper"
+  echo
+  echo "Current commit:"
+  echo "  $HEADER"
+  exit 1
+}
+
+# 1) Structure & type
+if ! echo "$HEADER" | grep -Eq "$TYPE_SCOPE_REGEX"; then
+  echo "Invalid format or type not allowed."
+  echo "Format: type(scope)?: subject"
+  echo "Allowed types: ${ALLOWED_TYPES}"
+  fail
+fi
+
+# 2) Header length
+LEN=${#HEADER}
+if [ "$LEN" -gt "$HEADER_MAX" ]; then
+  echo "Header too long ($LEN > ${HEADER_MAX})."
+  fail
+fi
+
+# 3) subject-case: NEVER (heuristics similar to commitlint)
+#    - sentence-case: first letter uppercase
+#    - start-case (Title Case): most words start uppercase
+#    - pascal-case: No spaces, LikeThis
+#    - upper-case: ALL UPPERCASE
+
+[ -z "$SUBJECT" ] && fail
+
+# 3.1 sentence-case (starts with uppercase)
+if echo "$SUBJECT" | grep -Eq '^[A-ZÀ-Ý]'; then
+  echo "subject-case: sentence-case is not allowed."
+  fail
+fi
+
+# 3.2 upper-case (all letters uppercase)
+ONLY_LETTERS="$(echo "$SUBJECT" | tr -cd '[:alpha:]')"
+if [ -n "$ONLY_LETTERS" ]; then
+  UPPER="$(echo "$ONLY_LETTERS" | tr '[:lower:]' '[:upper:]')"
+  if [ "$ONLY_LETTERS" = "$UPPER" ]; then
+    echo "subject-case: upper-case is not allowed."
+    fail
+  fi
+fi
+
+# 3.3 pascal-case
+if echo "$SUBJECT" | grep -Eq '^[A-Z][a-z0-9]+([A-Z][a-z0-9]+)+$'; then
+  echo "subject-case: pascal-case is not allowed."
+  fail
+fi
+
+# 3.4 start-case (Title Case) heuristic: >=80% words start uppercase
+WORDS_TOTAL=0
+WORDS_TITLE=0
+for w in $SUBJECT; do
+  if [ ${#w} -ge 2 ]; then
+    WORDS_TOTAL=$((WORDS_TOTAL+1))
+    if echo "$w" | grep -Eq '^[A-ZÀ-Ý]'; then
+      WORDS_TITLE=$((WORDS_TITLE+1))
+    fi
+  fi
+done
+if [ "$WORDS_TOTAL" -gt 0 ]; then
+  if [ $((WORDS_TITLE * 100 / WORDS_TOTAL)) -ge 80 ]; then
+    echo "subject-case: start-case (Title Case) is not allowed."
+    fail
+  fi
+fi
+
+echo "Commit message valid."
